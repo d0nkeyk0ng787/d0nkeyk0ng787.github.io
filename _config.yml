@@ -1,1 +1,6 @@
+remote_theme: pages-themes/hacker@v0.2.0
+plugins:
+- jekyll-remote-theme
 
+title: d0nkeyk0ng
+description: A place for me to share what things I am learning, projects I am working on, or anything else I find interesting and wish to share
