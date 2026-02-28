@@ -14,6 +14,7 @@ I had quite a bit of fun doing the labs, but realised I'm not amazing at C and r
 So, I begun playing around with calling different system calls in my C code in Linux, then using [strace](https://man7.org/linux/man-pages/man1/strace.1.html) to monitor what's going on under the hood. As I was doing this, I started to get curious about the assembly instructions that occur for syscalls. Having utilised indirect syscalls in my payloads before, I know that syscalls all have what's known as a syscall stub, which are the instructions in ASM that are used to execute a syscall.
 
 In Linux, that syscall stub looks like so:
+
 ```asm
 mov rax, <syscall-id> ; moves the syscall number into the rax register
 syscall               ; enter the kernel
@@ -21,8 +22,11 @@ ret
 ```
 
 As you can see, for Linux, this syscall stub is pretty simple. Another cool thing about Linux is that given it is open source, we can easily look at the code for syscalls, including their ID value. We can find a table of Linux syscalls [here](https://syscalls.mebeim.net/?table=x86/64/x64/latest). As you can see, it includes the ID, which is the value that gets moved to the `rax` register so that when the `syscall` instruction is run, the OS knows where to go to find the relevant code in the kernel to perform the appropriate action. 
+
 ## Exploring Syscalls in Linux
+
 As stated, my intention was to get better at C, so I wanted to play around with determining the system call ID for a given syscall in Linux programmatically. I did some research, and found that `strace` is utilising `ptrace()` for its functionality. So I decided to create a very limited recreation that find a given syscall. The code, with a breakdown of how it works, can be found below:
+
 ```c
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +89,9 @@ int main(int argc, char **argv) {
 ```
 
 This isn't particularly useful however, as the Linux kernel is open source, we can simply lookup the system call ID ourselves quite easily. Windows however, is another story altogether. 
+
 ## SysFinder
+
 To take this further, I wanted to get a similar effect in Windows. I initially expected to follow a similar principle of creating a child process, intercepting its execution of WinAPIs, for example `CreateThread`, to the point I could simply read the `rax` register value before the `NtCreateThreadEx` function is run and execution is handed off to the kernel. I was mistaken.
 
 The tricky thing about Windows is that there are quite a few layers of abstraction, that trying to achieve this, at least with my unfortunately limited programming skills, was going to be quite difficult. 
@@ -99,12 +105,15 @@ Now, my goal was to utilise the fundamentals of this technique to print out a li
 4. Parse the `.rdata` section of `ntdll.dll`, which contains the `Nt*` function names
 5. Parse the `.text` section of `ntdll.dll`, which contains the executable code for these functions, including their SSN
 6. Use the RVA for the function names and the function code pair and then print them
+
 ### Reading NTDLL
+
 To begin, we need into memory, `ntdll.dll` from disk. For this to occur, we need to do the following:
 1. Get a handle to `C:\Windows\system32\ntdll.dll` with [CreateFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)
 2. Allocate memory for `ntdll.dll` using [VirtualAlloc](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc). This API will, if successful, return the value which is the base address of the allocated region
 3. Read `ntdll.dll` into memory with [ReadFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile)
 Nothing too crazy here, we end up with something approximating the following. Please note, I have removed some of the error checking logic for the sake of keeping things neat:
+
 ```c
 hFile = CreateFileA("C:\\Windows\\System32\\ntdll.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
@@ -116,10 +125,15 @@ bReadResult = ReadFile(hFile, lpReadBuffer, dwNtdllSize, NULL, NULL);
 ```
 
 Now, we have a copy of `ntdll.dll` loaded into memory, whose starting address is found at `lpReadBuffer`. We can now begin parsing the PE headers.
+
 ### Parsing PE Headers
+
 We can now begin the fun stuff. To get the Export Address Table (EAT), we need to parse a few different headers. The following image shows the structure of a PE file:
+
 ![](/screenshots/sysfinder-project/82d48168c1d343af13171c2a91c71738_MD5.jpg)
+
 As you can see, a number of headers, and we need to make our way down them to be able to get to the where the EAT, which is found in the Data Directory. There are a number of good resources for learning how to parse these headers, and that isn't really the subject of this post, so I won't step through that. However, my code for doing that, minus some error checking which you will find in the final version, can be seen below:
+
 ```c
 // DOS HEader
 PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)lpReadBuffer;
@@ -137,9 +151,13 @@ PIMAGE_EXPORT_DIRECTORY pExportDirectory = (PIMAGE_EXPORT_DIRECTORY)((BYTE*)lpRe
 // Section Headers
 PIMAGE_SECTION_HEADER pSectionHeaders = (PIMAGE_SECTION_HEADER)(((PBYTE)pNtHeaders) + sizeof(IMAGE_NT_HEADERS));
 ```
+
 We now have parsed all the headers from the PE file (`ntdll.dll` in this case), that we need. We now need to move onto using the information from these sections, to extract the `Nt*` functions, both the function names, their corresponding syscall stub, which, will ultimately lead us to the SSN.
+
 ### Extracting SSNs
+
 We have parsed the headers, we have everything we need to get to our final result, we now need to put it altogether. Before I continue, I want to explain the `IMAGE_EXPORT_DIRECTORY` structure. This struct is defined in `winnt.h`, and looks like so:
+
 ```c
 typedef struct _IMAGE_EXPORT_DIRECTORY {
     DWORD   Characteristics;
@@ -155,12 +173,14 @@ typedef struct _IMAGE_EXPORT_DIRECTORY {
     DWORD   AddressOfNameOrdinals;  // RVA from base of image
 } IMAGE_EXPORT_DIRECTORY, *PIMAGE_EXPORT_DIRECTORY;
 ```
+
 The key aspects of this struct, that are most relevant to my use case, are the following:
 * `AddressOfNames` - These are the RVAs for `Nt*` function names. Each function, so `NtCreateThreadEx`, has a RVA, or offset from the base address of the module
 * `AddressOfFunctions` - These are the RVAs which point to the executable code for 
 * `AddressOfNameOrdinals` - These are the ordinal values that allow you to map the function names addresses in `AddressOfNames` to the code addressed in `AddressOfFunctions`
 
 These 3 values, will be what we require to achieve the final result, as well as the `NumberOfFunctions` value which will be useful in our `for` loop. The next step is to create 3 arrays, to store all the addresses we need to find our SSNs, but before that, we need to create the following function:
+
 ```c
 PVOID ConvertRVAtoPointer(IN PIMAGE_SECTION_HEADER pSection, IN DWORD dwRVA, IN PVOID lpReadBuffer) {
 	return (PVOID)((BYTE*)lpReadBuffer + (dwRVA - pSection->VirtualAddress + pSection->PointerToRawData));
@@ -185,6 +205,7 @@ A file pointer to the first page within the COFF file. This value must be a mult
 What does all this mean, essentially, we are just taking the `RVA`, subtracting the `VirtualAddress` so we get the correct offset of the target within the given section (so either `.rdata` or `.text`), and adding `PointerToRawData` to reposition that offset to where the section actually starts in the raw file. 
 
 Now that we are there, we need to create our 3 arrays, which will contain our adjusted address values:
+
 ```c
 DWORD* pAddressOfNtFuncNames = (DWORD*)ConvertRVAtoPointer(pRdataSection, pExportDirectory->AddressOfNames, (BYTE*)lpReadBuffer);
 DWORD* pAddressOfNtFuncCode = (DWORD*)ConvertRVAtoPointer(pRdataSection, pExportDirectory->AddressOfFunctions, (BYTE*)lpReadBuffer);
@@ -194,23 +215,27 @@ WORD* pAddressOfNtFuncOrds = (WORD*)ConvertRVAtoPointer(pRdataSection, pExportDi
 These arrays are quite simply, we are taking the addresses in the `AddressOfNames`, `AddressOfFunctions`, and `AddressOfNameOrdinals`, converting them to the correct value for our raw copy of `ntdll.dll` we loaded into memory, and then saving them into arrays. 
 
 Our final bit of logic will begin with a counter, which will be based on the `NumberOfFunctions` value in the `PIMAGE_EXPORT_DIRECTORY` struct:
+
 ```c
 for (int i = 0; i < pExportDirectory->NumberOfNames; i++) {
 ```
 
 We will create two `DWORD` pointer variables, one will hold the address in the `.rdata` section for the `Nt*` function name. The other, will hold the address, in the `.text` section, for the syscall stub:
+
 ```c
 DWORD* dwAddressOfNtFuncName = (DWORD*)ConvertRVAtoPointer(pRdataSection, pAddressOfNtFuncNames[i], (BYTE*)lpReadBuffer);
 DWORD* dwAddressOfNtFuncCode = (DWORD*)ConvertRVAtoPointer(pTextSection, pAddressOfNtFuncCode[pAddressOfNtFuncOrds[i]], (BYTE*)lpReadBuffer);
 ```
 
 With those addresses, we can now get the ASCII string name for the function, and the bytes of the syscall stub:
+
 ```c
 LPCSTR szNtFuncName = (LPCSTR)dwAddressOfNtFuncName;
 BYTE* pSyscallStub = (BYTE*)dwAddressOfNtFuncCode;
 ```
 
 The final check, will ensure the function begins with an `N` to find `Nt*` functions only, as well as ensuring the syscall stub begins with the bytes `0x4C`, as we know the Windows syscall stub looks like so:
+
 ```asm
 mov r10, rcx        ; save rcx (kernel will clobber it)
 mov eax, <SSN>      ; load system service number
@@ -219,6 +244,7 @@ ret                 ; return to caller
 ```
 
 Which, in bytes this looks like:
+
 ```
 4C 8B D1            ; mov r10, rcx 
 B8 XX 00 00 00      ; mov eax, SSN 
@@ -227,6 +253,7 @@ C3                  ; ret
 ```
 
 Our final logic looks like so:
+
 ```c
 LPCSTR szNtFuncName = (LPCSTR)dwAddressOfNtFuncName;
 BYTE* pSyscallStub = (BYTE*)dwAddressOfNtFuncCode;
@@ -241,34 +268,45 @@ if (szNtFuncName[0] == 'N' && pSyscallStub[0] == 0x4C) {
 You might notice, for the `pSyscallStub` variable in the `printf` statement, I am extracting the value at index `4`. If you look above at the bytes, you will see the SSN value is the 4th byte in the sequence. Another thing you might notice, I am casting it to `DWORD`, this is so that I can get an integer value, rather than the hex value. 
 
 When I build the project and run it, we can find the SSN for `NtCreateThreadEx` among others:
+
 ![](/screenshots/sysfinder-project/71aea390a6f99d344330fbed1d6c401d_MD5.jpg)
+
 ## Verification
+
 At this stage, all that's really left is to verify that the SSN value we got for `NtCreateThreadEx` is the actual SSN value for that syscall. To do this, we can create a very simple program that executes `CreateThread()`, which will ultimately execute the `NtCreateThreadEx` function in `ntdll.dll`. 
 
 With that created, we can open up WinDBG, and attach that program to our WinDBG. In addition to attaching my program, I also ran the command:
+
 ```
 bm *!NtCreateThreadEx
 ```
 
 This will create a breakpoint on any module, which exports a function that matches `NtCreateThreadEx`.
+
 ![](/screenshots/sysfinder-project/b653449b4db9540ea5caba4eee08f569_MD5.jpg)
 
 We can now type `g` to continue execution until we hit the breakpoint. Ultimately, it does hit as we utilised `CreateThread` in our program.
+
 ![](/screenshots/sysfinder-project/7cacde36849f830bad6f58c4eb71730b_MD5.jpg)
 
 We can see it broke on the instruction:
+
 ```asm
 mov r10, rcx
 ```
 
 From looking at the syscall stub earlier, we know that the next instruction will be the instruction that moves the SSN into the `eax/rax` register. So if we type `p` which will, step over the current instruction, we will hit that instruction, and see the SSN in the output of our debugger.
+
 ![](/screenshots/sysfinder-project/9987919872cee0d1eeb97cdbd8097a82_MD5.jpg)
 
 As expected, that is exactly what has happened. So, we step one more time and then run the command `.formats` to dump the value at `eax` in a few different formats:
+
 ![](/screenshots/sysfinder-project/c3048123daaab01487864c10f7b3ed56_MD5.jpg)
 
 As we can see, the SSN for `NtCreateThreadEx` is 201, exactly the same as what we saw in our output from parsing the `ntdll.dll` file.
+
 ## Wrapping Up
+
 I found this to be quite a fun journey that required quite a bit of reading of new techniques. Overall, it was a good project to aid in improving my coding proficiency, I certainly found that once I was past the point of parsing the PE headers, and into the realm of working out getting the addresses in the correct format, I struggled quite a bit. 
 
 Fortunately, I was able to get some assistance from Claude, specifically for working out the calculation of the addresses and the extensive typecasting which I am still not all over yet. 
@@ -276,6 +314,7 @@ Fortunately, I was able to get some assistance from Claude, specifically for wor
 Overall, I am quite happy that I managed to, for the most part, get this done without having AI writing or debugging my code aside from some minor points, and relied on it for the most part to work out the logic of things. 
 
 Below you can find some of the resources I utilised to build this project. In addition, you can find the entire source code on my [Github here](https://github.com/d0nkeyk0ng787/SysFinder).
+
 ## Resources
 1. https://www.ired.team/offensive-security/defense-evasion/retrieving-ntdll-syscall-stubs-at-run-time
 2. https://github.com/am0nsec/HellsGate
