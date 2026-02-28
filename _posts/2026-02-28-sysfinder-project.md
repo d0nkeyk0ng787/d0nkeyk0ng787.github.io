@@ -117,7 +117,7 @@ bReadResult = ReadFile(hFile, lpReadBuffer, dwNtdllSize, NULL, NULL);
 Now, we have a copy of `ntdll.dll` loaded into memory, whose starting address is found at `lpReadBuffer`. We can now begin parsing the PE headers.
 ### Parsing PE Headers
 We can now begin the fun stuff. To get the Export Address Table (EAT), we need to parse a few different headers. The following image shows the structure of a PE file:
-![[Screenshots/SysFinder Project/82d48168c1d343af13171c2a91c71738_MD5.jpg]]
+![[/secreenshots/sysfinder-project/82d48168c1d343af13171c2a91c71738_MD5.jpg]]
 As you can see, a number of headers, and we need to make our way down them to be able to get to the where the EAT, which is found in the Data Directory. There are a number of good resources for learning how to parse these headers, and that isn't really the subject of this post, so I won't step through that. However, my code for doing that, minus some error checking which you will find in the final version, can be seen below:
 ```c
 // DOS HEader
@@ -240,7 +240,7 @@ if (szNtFuncName[0] == 'N' && pSyscallStub[0] == 0x4C) {
 You might notice, for the `pSyscallStub` variable in the `printf` statement, I am extracting the value at index `4`. If you look above at the bytes, you will see the SSN value is the 4th byte in the sequence. Another thing you might notice, I am casting it to `DWORD`, this is so that I can get an integer value, rather than the hex value. 
 
 When I build the project and run it, we can find the SSN for `NtCreateThreadEx` among others:
-![[Screenshots/SysFinder Project/71aea390a6f99d344330fbed1d6c401d_MD5.jpg]]
+![[/secreenshots/sysfinder-project/71aea390a6f99d344330fbed1d6c401d_MD5.jpg]]
 ## Verification
 At this stage, all that's really left is to verify that the SSN value we got for `NtCreateThreadEx` is the actual SSN value for that syscall. To do this, we can create a very simple program that executes `CreateThread()`, which will ultimately execute the `NtCreateThreadEx` function in `ntdll.dll`. 
 
@@ -250,10 +250,10 @@ bm *!NtCreateThreadEx
 ```
 
 This will create a breakpoint on any module, which exports a function that matches `NtCreateThreadEx`.
-![[Screenshots/SysFinder Project/b653449b4db9540ea5caba4eee08f569_MD5.jpg]]
+![[/secreenshots/sysfinder-project/b653449b4db9540ea5caba4eee08f569_MD5.jpg]]
 
 We can now type `g` to continue execution until we hit the breakpoint. Ultimately, it does hit as we utilised `CreateThread` in our program.
-![[Screenshots/SysFinder Project/7cacde36849f830bad6f58c4eb71730b_MD5.jpg]]
+![[/secreenshots/sysfinder-project/7cacde36849f830bad6f58c4eb71730b_MD5.jpg]]
 
 We can see it broke on the instruction:
 ```asm
@@ -261,10 +261,10 @@ mov r10, rcx
 ```
 
 From looking at the syscall stub earlier, we know that the next instruction will be the instruction that moves the SSN into the `eax/rax` register. So if we type `p` which will, step over the current instruction, we will hit that instruction, and see the SSN in the output of our debugger.
-![[Screenshots/SysFinder Project/9987919872cee0d1eeb97cdbd8097a82_MD5.jpg]]
+![[/secreenshots/sysfinder-project/9987919872cee0d1eeb97cdbd8097a82_MD5.jpg]]
 
 As expected, that is exactly what has happened. So, we step one more time and then run the command `.formats` to dump the value at `eax` in a few different formats:
-![[Screenshots/SysFinder Project/c3048123daaab01487864c10f7b3ed56_MD5.jpg]]
+![[/secreenshots/sysfinder-project/c3048123daaab01487864c10f7b3ed56_MD5.jpg]]
 
 As we can see, the SSN for `NtCreateThreadEx` is 201, exactly the same as what we saw in our output from parsing the `ntdll.dll` file.
 ## Wrapping Up
