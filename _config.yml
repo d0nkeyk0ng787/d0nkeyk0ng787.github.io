@@ -4,3 +4,4 @@ plugins:
 
 title: d0nkeyk0ng
 description: A place for me to share what things I am learning, projects I am working on, or anything else I find interesting and wish to share
+markdown: kramdown
